@@ -1,0 +1,10 @@
+# Build artifacts
+build/
+gcc13/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
