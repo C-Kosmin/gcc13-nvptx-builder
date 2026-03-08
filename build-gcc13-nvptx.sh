@@ -6,7 +6,7 @@
 #
 # Optional env:
 #   CUDA_DIR=/usr/local/cuda        # CUDA toolkit location
-#   INSTALL_PREFIX=$PWD/gcc13        # where to install the toolchain
+#   INSTALL_PREFIX=/usr/local         # where to install the toolchain
 #   BUILD_DIR=$PWD/build             # where intermediate build trees go
 #   GCC_JOBS=<n>                     # parallel make jobs (default: nproc/2)
 #   FORCE_REBUILD=0                  # set to 1 to clean and rebuild from scratch
@@ -53,40 +53,112 @@ NPROC=$(( NPROC_ALL / 2 ))
 GCC_JOBS="${GCC_JOBS:-${NPROC}}"
 FORCE_REBUILD="${FORCE_REBUILD:-0}"
 
-INSTALL_PREFIX="${INSTALL_PREFIX:-${SCRIPT_DIR}/gcc13}"
+INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
 
-# ── CUDA auto-detection ──────────────────────────────────────────────────────
+# ── CUDA auto-detection / auto-install ────────────────────────────────────────
 
 CUDA_DIR="${CUDA_DIR:-/usr/local/cuda}"
 CUDA_INCLUDE=""
 CUDA_LIB=""
+CUDA_VERSION_TARGET="12-8"
 
-for cand_dir in "${CUDA_DIR}" /usr/local/cuda /usr/lib/cuda /opt/cuda; do
-  if [[ -f "${cand_dir}/include/cuda.h" ]]; then
-    CUDA_INCLUDE="${cand_dir}/include"
-    break
-  fi
-done
+detect_cuda() {
+  CUDA_INCLUDE=""
+  CUDA_LIB=""
 
-for cand_lib in \
-    "${CUDA_DIR}/lib64" \
-    /usr/lib/x86_64-linux-gnu \
-    /usr/local/cuda/lib64 \
-    /usr/lib/cuda/lib64 \
-    /opt/cuda/lib64; do
-  if [[ -f "${cand_lib}/libcuda.so" || -L "${cand_lib}/libcuda.so" ]]; then
-    CUDA_LIB="${cand_lib}"
-    break
+  for cand_dir in "${CUDA_DIR}" /usr/local/cuda-12.8 /usr/local/cuda /usr/lib/cuda /opt/cuda; do
+    if [[ -f "${cand_dir}/include/cuda.h" ]]; then
+      CUDA_INCLUDE="${cand_dir}/include"
+      break
+    fi
+  done
+
+  for cand_lib in \
+      "${CUDA_DIR}/lib64" \
+      "${CUDA_DIR}/lib64/stubs" \
+      /usr/local/cuda-12.8/lib64 \
+      /usr/local/cuda-12.8/lib64/stubs \
+      /usr/local/cuda/lib64 \
+      /usr/local/cuda/lib64/stubs \
+      /usr/lib/x86_64-linux-gnu \
+      /usr/lib/cuda/lib64 \
+      /opt/cuda/lib64; do
+    if [[ -f "${cand_lib}/libcuda.so" || -L "${cand_lib}/libcuda.so" ]]; then
+      CUDA_LIB="${cand_lib}"
+      break
+    fi
+  done
+}
+
+install_cuda_toolkit() {
+  echo "==> CUDA toolkit not found — installing CUDA ${CUDA_VERSION_TARGET//-/.} ..."
+
+  if ! command -v lsb_release &>/dev/null; then
+    echo "ERROR: lsb_release not found. Install with: sudo apt install lsb-release"
+    exit 1
   fi
-done
+
+  local distro_id distro_version distro_tag arch
+  distro_id="$(lsb_release -si | tr '[:upper:]' '[:lower:]')"
+  distro_version="$(lsb_release -sr)"
+  arch="$(dpkg --print-architecture)"
+
+  if [[ "${distro_id}" != "ubuntu" && "${distro_id}" != "debian" ]]; then
+    echo "ERROR: Automatic CUDA install is only supported on Ubuntu/Debian."
+    echo "   Install the CUDA toolkit manually and re-run, or set CUDA_DIR."
+    exit 1
+  fi
+  if [[ "${arch}" != "amd64" ]]; then
+    echo "ERROR: Automatic CUDA install only supports x86_64 (amd64). Detected: ${arch}"
+    exit 1
+  fi
+
+  local distro_tag="${distro_id}${distro_version//./}"
+  local keyring_url="https://developer.download.nvidia.com/compute/cuda/repos/${distro_tag}/x86_64/cuda-keyring_1.1-1_all.deb"
+  local keyring_deb
+  keyring_deb="$(mktemp --suffix=.deb)"
+
+  echo "   Distribution: ${distro_id} ${distro_version} (${distro_tag})"
+  echo "   Keyring URL:  ${keyring_url}"
+
+  if ! curl -fsSL "${keyring_url}" -o "${keyring_deb}"; then
+    echo "ERROR: Failed to download CUDA keyring for ${distro_tag}."
+    echo "   Your distro may not be supported by NVIDIA's repo."
+    echo "   Install the CUDA toolkit manually and re-run, or set CUDA_DIR."
+    rm -f "${keyring_deb}"
+    exit 1
+  fi
+
+  sudo dpkg -i "${keyring_deb}"
+  rm -f "${keyring_deb}"
+  sudo apt-get update -qq
+
+  echo "==> Installing cuda-toolkit-${CUDA_VERSION_TARGET} ..."
+  sudo apt-get install -y "cuda-toolkit-${CUDA_VERSION_TARGET}"
+
+  if [[ -d "/usr/local/cuda-${CUDA_VERSION_TARGET//-/.}" ]]; then
+    CUDA_DIR="/usr/local/cuda-${CUDA_VERSION_TARGET//-/.}"
+  fi
+
+  echo "==> CUDA toolkit ${CUDA_VERSION_TARGET//-/.} installed successfully."
+}
+
+detect_cuda
+
+if [[ -z "${CUDA_INCLUDE}" || -z "${CUDA_LIB}" ]]; then
+  install_cuda_toolkit
+  detect_cuda
+fi
 
 if [[ -z "${CUDA_INCLUDE}" ]]; then
-  echo "ERROR: CUDA include dir not found (need cuda.h). Set CUDA_DIR=/path/to/cuda."
+  echo "ERROR: CUDA include dir not found (need cuda.h) even after install."
+  echo "   Set CUDA_DIR=/path/to/cuda and re-run."
   exit 1
 fi
 if [[ -z "${CUDA_LIB}" ]]; then
-  echo "ERROR: CUDA driver library not found (need libcuda.so). Set CUDA_DIR=/path/to/cuda."
+  echo "ERROR: CUDA driver library not found (need libcuda.so) even after install."
+  echo "   Set CUDA_DIR=/path/to/cuda and re-run."
   exit 1
 fi
 

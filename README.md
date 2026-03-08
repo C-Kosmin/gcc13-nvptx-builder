@@ -8,8 +8,8 @@ The resulting compiler supports OpenMP `target` directives that offload computat
 
 - **Linux x86_64** (tested on Ubuntu 22.04+)
 - **System GCC** (any version that can bootstrap GCC 13)
-- **CUDA toolkit** with `cuda.h` and `libcuda.so` (driver API)
-- **sudo access** (needed for `update-alternatives` registration)
+- **CUDA toolkit** — auto-installed (CUDA 12.8) if not detected; or provide your own via `CUDA_DIR`
+- **sudo access** (needed for CUDA install and `update-alternatives` registration)
 - Standard build tools: `make`, `git`, `curl`, `bison`, `flex`, `texinfo`
 
 Install build dependencies on Debian/Ubuntu:
@@ -19,7 +19,7 @@ sudo apt install build-essential git curl bison flex texinfo \
   libgmp-dev libmpfr-dev libmpc-dev libisl-dev zlib1g-dev
 ```
 
-> **Note:** The script checks for all required packages and commands at startup and will exit with a clear error message if anything is missing.
+> **Note:** The script checks for all required packages and commands at startup and will exit with a clear error message if anything is missing. If no CUDA toolkit is detected, it automatically installs CUDA 12.8 from NVIDIA's official apt repository (Ubuntu/Debian x86_64 only).
 
 ## Usage
 
@@ -30,7 +30,7 @@ sudo apt install build-essential git curl bison flex texinfo \
 The script will:
 
 1. **Check** that all build dependencies are installed
-2. Auto-detect your CUDA installation
+2. Auto-detect your CUDA installation — **installs CUDA 12.8** if not found
 3. Clone and build **nvptx-tools**
 4. Clone **GCC 13** and **newlib** for NVPTX
 5. Build the NVPTX target cross-compiler
@@ -43,7 +43,7 @@ The script will:
 | Variable | Default | Description |
 |---|---|---|
 | `CUDA_DIR` | `/usr/local/cuda` | CUDA toolkit root |
-| `INSTALL_PREFIX` | `./gcc13` | Where to install the toolchain |
+| `INSTALL_PREFIX` | `/usr/local` | Where to install the toolchain |
 | `BUILD_DIR` | `./build` | Intermediate build tree location |
 | `GCC_JOBS` | `nproc / 2` | Parallel make jobs |
 | `FORCE_REBUILD` | `0` | Set to `1` to clean and rebuild from scratch |
