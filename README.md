@@ -2,13 +2,14 @@
 
 Build script for a custom GCC 13 toolchain with NVIDIA PTX GPU offloading support and native architecture tuning (`-march=native`).
 
-The resulting compiler supports OpenMP `target` directives that offload computation to NVIDIA GPUs via the NVPTX backend.
+The resulting compiler supports OpenMP `target` directives that offload computation to NVIDIA GPUs via the NVPTX backend. The script automatically registers GCC 13 as the **system default** compiler.
 
 ## Prerequisites
 
 - **Linux x86_64** (tested on Ubuntu 22.04+)
 - **System GCC** (any version that can bootstrap GCC 13)
 - **CUDA toolkit** with `cuda.h` and `libcuda.so` (driver API)
+- **sudo access** (needed for `update-alternatives` registration)
 - Standard build tools: `make`, `git`, `curl`, `bison`, `flex`, `texinfo`
 
 Install build dependencies on Debian/Ubuntu:
@@ -18,6 +19,8 @@ sudo apt install build-essential git curl bison flex texinfo \
   libgmp-dev libmpfr-dev libmpc-dev libisl-dev zlib1g-dev
 ```
 
+> **Note:** The script checks for all required packages and commands at startup and will exit with a clear error message if anything is missing.
+
 ## Usage
 
 ```bash
@@ -26,11 +29,14 @@ sudo apt install build-essential git curl bison flex texinfo \
 
 The script will:
 
-1. Auto-detect your CUDA installation
-2. Clone and build **nvptx-tools**
-3. Clone **GCC 13** and **newlib** for NVPTX
-4. Build the NVPTX target cross-compiler
-5. Build the host GCC 13 with `--enable-offload-targets=nvptx-none` and `--with-arch=<native>`
+1. **Check** that all build dependencies are installed
+2. Auto-detect your CUDA installation
+3. Clone and build **nvptx-tools**
+4. Clone **GCC 13** and **newlib** for NVPTX
+5. Build the NVPTX target cross-compiler
+6. Build the host GCC 13 with `--enable-offload-targets=nvptx-none` and `--with-arch=<native>`
+7. **Register** GCC 13 as the system default via `update-alternatives`
+8. **Persist** `PATH` and `LD_LIBRARY_PATH` in `~/.bashrc`
 
 ### Environment Variables
 
@@ -55,16 +61,12 @@ INSTALL_PREFIX=/opt/gcc13-nvptx CUDA_DIR=/usr/local/cuda-12.4 ./build-gcc13-nvpt
 FORCE_REBUILD=1 ./build-gcc13-nvptx.sh
 ```
 
-## Using the Toolchain
+## After Installation
 
-After the build completes, activate the toolchain:
+Once the script completes, GCC 13 is the system default. Open a new terminal (or run `source ~/.bashrc`) and verify:
 
 ```bash
-export PATH="$PWD/gcc13/bin:$PATH"
-export LD_LIBRARY_PATH="$PWD/gcc13/lib64:${LD_LIBRARY_PATH:-}"
-export CC="$PWD/gcc13/bin/gcc"
-export CXX="$PWD/gcc13/bin/g++"
-export FC="$PWD/gcc13/bin/gfortran"
+gcc --version    # should show GCC 13.x.x
 ```
 
 Compile with OpenMP GPU offloading:
@@ -72,6 +74,18 @@ Compile with OpenMP GPU offloading:
 ```bash
 gcc -fopenmp -foffload=nvptx-none -o my_app my_app.c
 ```
+
+### Reverting to the Previous System GCC
+
+The script uses `update-alternatives`, so you can switch back at any time:
+
+```bash
+sudo update-alternatives --config gcc
+sudo update-alternatives --config g++
+sudo update-alternatives --config gfortran
+```
+
+To also remove the `~/.bashrc` entries, delete the block between `# >>> gcc13-nvptx-builder >>>` and `# <<< gcc13-nvptx-builder <<<`.
 
 ## What Gets Built
 

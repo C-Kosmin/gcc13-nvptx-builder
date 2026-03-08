@@ -15,6 +15,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# ── Dependency check ─────────────────────────────────────────────────────────
+
+REQUIRED_PKGS=(
+  build-essential git curl bison flex texinfo
+  libgmp-dev libmpfr-dev libmpc-dev libisl-dev zlib1g-dev
+)
+REQUIRED_CMDS=(gcc g++ make git curl bison flex makeinfo)
+
+missing_pkgs=()
+for pkg in "${REQUIRED_PKGS[@]}"; do
+  if ! dpkg -s "$pkg" &>/dev/null; then
+    missing_pkgs+=("$pkg")
+  fi
+done
+
+missing_cmds=()
+for cmd in "${REQUIRED_CMDS[@]}"; do
+  if ! command -v "$cmd" &>/dev/null; then
+    missing_cmds+=("$cmd")
+  fi
+done
+
+if (( ${#missing_pkgs[@]} > 0 )) || (( ${#missing_cmds[@]} > 0 )); then
+  echo "ERROR: Missing build dependencies."
+  (( ${#missing_pkgs[@]} > 0 )) && echo "   Missing packages: ${missing_pkgs[*]}"
+  (( ${#missing_cmds[@]} > 0 )) && echo "   Missing commands: ${missing_cmds[*]}"
+  echo ""
+  echo "   Install with:"
+  echo "     sudo apt install ${REQUIRED_PKGS[*]}"
+  exit 1
+fi
+echo "==> All build dependencies satisfied."
+
 NPROC_ALL="$(nproc 2>/dev/null || echo 8)"
 NPROC=$(( NPROC_ALL / 2 ))
 GCC_JOBS="${GCC_JOBS:-${NPROC}}"
@@ -145,7 +178,7 @@ if [[ ! -d gcc ]]; then
 fi
 if [[ ! -d nvptx-newlib ]]; then
   echo "==> Cloning newlib for NVPTX..."
-  git clone --depth 1 git://sourceware.org/git/newlib-cygwin.git nvptx-newlib
+  git clone --depth 1 https://sourceware.org/git/newlib-cygwin.git nvptx-newlib
 fi
 ln -sfn ../nvptx-newlib/newlib gcc/newlib
 
@@ -211,15 +244,69 @@ if [[ ! -x "${INSTALL_PREFIX}/bin/gcc" ]]; then
   exit 1
 fi
 
+GCC13_VERSION="$("${INSTALL_PREFIX}/bin/gcc" -dumpfullversion)"
+GCC13_MAJOR="${GCC13_VERSION%%.*}"
+GCC13_PRIORITY=$(( GCC13_MAJOR * 10 ))
+
 echo ""
 echo "==> GCC 13 with NVPTX offloading built successfully!"
 "${INSTALL_PREFIX}/bin/gcc" --version
-echo ""
 echo "   Install prefix: ${INSTALL_PREFIX}"
+
+# ── Register with update-alternatives (system default) ───────────────────────
+
 echo ""
-echo "   To use this toolchain:"
-echo "     export PATH=\"${INSTALL_PREFIX}/bin:\${PATH}\""
-echo "     export LD_LIBRARY_PATH=\"${INSTALL_PREFIX}/lib64:\${LD_LIBRARY_PATH:-}\""
-echo "     export CC=\"${INSTALL_PREFIX}/bin/gcc\""
-echo "     export CXX=\"${INSTALL_PREFIX}/bin/g++\""
-echo "     export FC=\"${INSTALL_PREFIX}/bin/gfortran\""
+echo "==> Registering GCC ${GCC13_MAJOR} as the system default via update-alternatives..."
+
+ALTERNATIVES=(
+  "gcc      ${INSTALL_PREFIX}/bin/gcc"
+  "g++      ${INSTALL_PREFIX}/bin/g++"
+  "gfortran ${INSTALL_PREFIX}/bin/gfortran"
+  "gcc-ar   ${INSTALL_PREFIX}/bin/gcc-ar"
+  "gcc-nm   ${INSTALL_PREFIX}/bin/gcc-nm"
+  "gcov     ${INSTALL_PREFIX}/bin/gcov"
+)
+
+for entry in "${ALTERNATIVES[@]}"; do
+  read -r name path <<< "$entry"
+  if [[ -x "$path" ]]; then
+    sudo update-alternatives --install "/usr/bin/${name}" "${name}" "${path}" "${GCC13_PRIORITY}" 2>/dev/null || true
+    sudo update-alternatives --set "${name}" "${path}" 2>/dev/null || true
+  fi
+done
+
+echo "   update-alternatives configured (priority ${GCC13_PRIORITY})."
+echo "   To revert:  sudo update-alternatives --config gcc"
+
+# ── Persist PATH and LD_LIBRARY_PATH in ~/.bashrc ────────────────────────────
+
+BASHRC="${HOME}/.bashrc"
+MARKER="# >>> gcc13-nvptx-builder >>>"
+MARKER_END="# <<< gcc13-nvptx-builder <<<"
+
+BLOCK="${MARKER}
+export PATH=\"${INSTALL_PREFIX}/bin:\${PATH}\"
+export LD_LIBRARY_PATH=\"${INSTALL_PREFIX}/lib64:\${LD_LIBRARY_PATH:-}\"
+${MARKER_END}"
+
+if [[ -f "${BASHRC}" ]] && grep -qF "${MARKER}" "${BASHRC}"; then
+  echo "==> Updating existing gcc13-nvptx-builder block in ${BASHRC}..."
+  tmpfile="$(mktemp)"
+  awk -v marker="${MARKER}" -v marker_end="${MARKER_END}" -v block="${BLOCK}" '
+    $0 == marker { skip=1; printed=1; print block; next }
+    $0 == marker_end { skip=0; next }
+    !skip { print }
+  ' "${BASHRC}" > "${tmpfile}"
+  mv "${tmpfile}" "${BASHRC}"
+else
+  echo "==> Adding gcc13-nvptx-builder PATH to ${BASHRC}..."
+  printf '\n%s\n' "${BLOCK}" >> "${BASHRC}"
+fi
+
+echo ""
+echo "==> Setup complete!"
+echo "   GCC ${GCC13_VERSION} is now the system default."
+echo "   PATH and LD_LIBRARY_PATH have been added to ${BASHRC}."
+echo ""
+echo "   Run 'source ~/.bashrc' or open a new terminal to activate."
+echo "   Verify with: gcc --version"
